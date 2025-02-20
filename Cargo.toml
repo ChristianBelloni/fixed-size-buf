@@ -1,0 +1,14 @@
+[package]
+name = "fixed-size-buf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-queue = "0.3.12"
+futures = "0.3.31"
+futures-util = "0.3.31"
+
+[dev-dependencies]
+memmap2 = "0.9.5"
+oneshot = "0.1.10"
+tempdir = "0.3.7"
