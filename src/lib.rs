@@ -13,6 +13,9 @@ use futures::BufGuardFuture;
 mod backing_buffer;
 mod futures;
 
+#[cfg(feature = "memmap")]
+pub use memmap2::MmapMut;
+
 pub struct Buffer<Inner, const BLOCKS: usize, const SIZE: usize> {
     storage: Arc<BackingBuffer<Inner, BLOCKS, SIZE>>,
     /// TRUE available FALSE occupied
