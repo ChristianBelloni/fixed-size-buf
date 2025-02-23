@@ -1,14 +1,18 @@
 [package]
 name = "fixed-size-buf"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
 crossbeam-queue = "0.3.12"
-futures = "0.3.31"
-futures-util = "0.3.31"
+memmap2 = { version = "0.9", optional = true }
 
 [dev-dependencies]
+futures = "0.3.31"
 memmap2 = "0.9.5"
 oneshot = "0.1.10"
 tempdir = "0.3.7"
+
+[features]
+default = []
+memmap = ["dep:memmap2"]
