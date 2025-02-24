@@ -34,6 +34,7 @@ impl<Inner, const BLOCKS: usize, const SIZE: usize> Clone for Buffer<Inner, BLOC
 }
 
 impl<Inner, const BLOCKS: usize, const SIZE: usize> Buffer<Inner, BLOCKS, SIZE> {
+    #[cfg(feature = "unsafe_new")]
     pub unsafe fn new(inner: Inner) -> Self {
         let mut registry = Vec::with_capacity(BLOCKS);
         for _ in 0..BLOCKS {
@@ -112,19 +113,15 @@ impl<const BLOCKS: usize, const SIZE: usize> Buffer<Box<[u8]>, BLOCKS, SIZE> {
 #[cfg(feature = "memmap")]
 impl<const BLOCKS: usize, const SIZE: usize> Buffer<memmap2::MmapMut, BLOCKS, SIZE> {
     pub unsafe fn new_memmap(backing_file: &std::path::Path) -> std::io::Result<Self> {
-        use std::io::Write;
-
-        let mut backing_file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(backing_file)
-            .unwrap();
-
-        backing_file.set_len((BLOCKS * SIZE).try_into().unwrap())?;
-        backing_file.flush()?;
-        let map = unsafe { memmap2::MmapMut::map_mut(&backing_file)? };
-        unsafe { Ok(Self::new(map)) }
+        let mut registry = Vec::with_capacity(BLOCKS);
+        for _ in 0..BLOCKS {
+            registry.push(AtomicBool::new(true));
+        }
+        Ok(Self {
+            storage: Arc::new(BackingBuffer::new_memmap(backing_file)?),
+            registry: Arc::new(registry.try_into().unwrap()),
+            waiters: Default::default(),
+        })
     }
 }
 
@@ -153,6 +150,7 @@ impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> DerefMut
 
 impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> Drop for BufGuard<'a, Inner, BLOCKS, SIZE> {
     fn drop(&mut self) {
+        self.fill(0);
         self.buffer.free_block(self);
     }
 }
@@ -160,7 +158,7 @@ impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> Drop for BufGuard<'a, In
 #[cfg(test)]
 mod tests {
 
-    const SIZE: usize = 1048576 * 2;
+    const SIZE: usize = 1048576 * 3;
     use std::{io::Write, thread, time::Duration};
 
     use tempdir::TempDir;
@@ -174,10 +172,7 @@ mod tests {
             tx.send(())
         });
         ::futures::executor::block_on(async move {
-            let mut v = Vec::with_capacity(10 * SIZE);
-            v.fill(0);
-
-            let buffer = unsafe { Buffer::<_, 10, SIZE>::new(v) };
+            let buffer = Buffer::<_, 10, SIZE>::new_vec();
             let buf = buffer.acquire_block().await;
             assert_eq!(buf.len(), SIZE);
             assert!(buf.iter().all(|&a| a == 0));
@@ -231,20 +226,13 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "memmap")]
     #[test]
     fn test_race() {
         let dir = TempDir::new("dir").unwrap();
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(dir.path().join("file.txt"))
-            .unwrap();
 
-        f.set_len((10 * SIZE) as _).unwrap();
-        f.flush().unwrap();
-        let map = unsafe { memmap2::MmapMut::map_mut(&f).unwrap() };
-        let buffer = unsafe { Buffer::<_, 10, SIZE>::new(map) };
+        let buffer =
+            unsafe { Buffer::<_, 10, SIZE>::new_memmap(&dir.path().join("file")).unwrap() };
         let mut hs = Vec::new();
         for _ in 0..50 {
             let buffer = buffer.clone();
