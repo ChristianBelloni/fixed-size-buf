@@ -1,11 +1,12 @@
 [package]
 name = "fixed-size-buf"
-version = "1.0.2"
+version = "1.1.2"
 edition = "2021"
 description = "Fixed size async buffer pool"
 license = "MIT"
 
 [dependencies]
+bytes = { version = "1.10.0", optional = true }
 crossbeam-queue = "0.3.12"
 memmap2 = { version = "0.9", optional = true }
 
@@ -18,4 +19,5 @@ tempdir = "0.3.7"
 [features]
 default = []
 memmap = ["dep:memmap2"]
+bytes = ["dep:bytes"]
 unsafe_new = []

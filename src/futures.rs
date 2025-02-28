@@ -17,7 +17,7 @@ impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> Future
 where
     Inner: DerefMut<Target = [u8]>,
 {
-    type Output = BufGuard<'a, Inner, BLOCKS, SIZE>;
+    type Output = BufGuard<Inner, BLOCKS, SIZE>;
     fn poll(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

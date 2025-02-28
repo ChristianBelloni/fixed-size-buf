@@ -52,11 +52,19 @@ impl<const BLOCKS: usize, const SIZE: usize> BackingBuffer<memmap2::MmapMut, BLO
     }
 }
 
+#[cfg(feature = "bytes")]
+impl<const BLOCKS: usize, const SIZE: usize> BackingBuffer<bytes::BytesMut, BLOCKS, SIZE> {
+    pub fn new_bytes() -> Self {
+        let bytes = bytes::BytesMut::with_capacity(BLOCKS * SIZE);
+        Self(UnsafeCell::new(bytes))
+    }
+}
+
 impl<Inner, const BLOCKS: usize, const SIZE: usize> BackingBuffer<Inner, BLOCKS, SIZE>
 where
     Inner: Deref<Target = [u8]> + DerefMut,
 {
-    pub(crate) unsafe fn get_block(&self, index: usize) -> &mut [u8] {
+    pub(crate) unsafe fn get_block(&self, index: usize) -> &'static mut [u8] {
         unsafe {
             let slice = &self.0;
             let slice = (*slice.get()).as_mut_ptr();

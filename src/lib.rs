@@ -47,7 +47,7 @@ impl<Inner, const BLOCKS: usize, const SIZE: usize> Buffer<Inner, BLOCKS, SIZE> 
         }
     }
 
-    fn free_block(&self, guard: &BufGuard<'_, Inner, BLOCKS, SIZE>) {
+    fn free_block(&self, guard: &mut BufGuard<Inner, BLOCKS, SIZE>) {
         let idx = guard.idx;
         self.registry[idx].store(true, Ordering::SeqCst);
         if let Some(waker) = self.waiters.pop() {
@@ -64,7 +64,7 @@ impl<Inner, const BLOCKS: usize, const SIZE: usize> Buffer<Inner, BLOCKS, SIZE>
 where
     Inner: Deref<Target = [u8]> + DerefMut,
 {
-    pub async fn acquire_block<'a>(&'a self) -> BufGuard<'a, Inner, BLOCKS, SIZE> {
+    pub async fn acquire_block(&self) -> BufGuard<Inner, BLOCKS, SIZE> {
         let block = self.try_acquire_block();
 
         if let Some(block) = block {
@@ -74,7 +74,7 @@ where
         }
     }
 
-    fn try_acquire_block<'a>(&'a self) -> Option<BufGuard<'a, Inner, BLOCKS, SIZE>> {
+    fn try_acquire_block<'a>(&'a self) -> Option<BufGuard<Inner, BLOCKS, SIZE>> {
         let mut idx = None;
         for (i, e) in self.registry.iter().enumerate() {
             if e.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
@@ -89,7 +89,7 @@ where
         let block = unsafe { self.storage.get_block(idx) };
         BufGuard {
             block,
-            buffer: self,
+            buffer: self.clone(),
             idx,
         }
         .into()
@@ -125,33 +125,45 @@ impl<const BLOCKS: usize, const SIZE: usize> Buffer<memmap2::MmapMut, BLOCKS, SI
     }
 }
 
-pub struct BufGuard<'a, Inner, const BLOCKS: usize, const SIZE: usize> {
-    buffer: &'a Buffer<Inner, BLOCKS, SIZE>,
-    block: &'a mut [u8],
+#[cfg(feature = "bytes")]
+impl<const BLOCKS: usize, const SIZE: usize> Buffer<bytes::BytesMut, BLOCKS, SIZE> {
+    pub unsafe fn new_bytes() -> std::io::Result<Self> {
+        let mut registry = Vec::with_capacity(BLOCKS);
+        for _ in 0..BLOCKS {
+            registry.push(AtomicBool::new(true));
+        }
+        Ok(Self {
+            storage: Arc::new(BackingBuffer::new_bytes()),
+            registry: Arc::new(registry.try_into().unwrap()),
+            waiters: Default::default(),
+        })
+    }
+}
+
+pub struct BufGuard<Inner, const BLOCKS: usize, const SIZE: usize> {
+    buffer: Buffer<Inner, BLOCKS, SIZE>,
+    block: &'static mut [u8],
     idx: usize,
 }
 
-impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> Deref
-    for BufGuard<'a, Inner, BLOCKS, SIZE>
-{
+impl<Inner, const BLOCKS: usize, const SIZE: usize> Deref for BufGuard<Inner, BLOCKS, SIZE> {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.block
     }
 }
 
-impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> DerefMut
-    for BufGuard<'a, Inner, BLOCKS, SIZE>
-{
+impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> DerefMut for BufGuard<Inner, BLOCKS, SIZE> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.block
     }
 }
 
-impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> Drop for BufGuard<'a, Inner, BLOCKS, SIZE> {
+impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> Drop for BufGuard<Inner, BLOCKS, SIZE> {
     fn drop(&mut self) {
         self.fill(0);
-        self.buffer.free_block(self);
+        let buffer = self.buffer.clone();
+        buffer.free_block(self);
     }
 }
 
