@@ -5,6 +5,7 @@ use std::{
         Arc,
     },
     task::Waker,
+    thread::Thread,
 };
 
 use backing_buffer::BackingBuffer;
@@ -16,11 +17,16 @@ mod futures;
 #[cfg(feature = "memmap")]
 pub use memmap2::MmapMut;
 
+enum InnerWaker {
+    Waker(Waker),
+    Thread(Thread),
+}
+
 pub struct Buffer<Inner, const BLOCKS: usize, const SIZE: usize> {
     storage: Arc<BackingBuffer<Inner, BLOCKS, SIZE>>,
     /// TRUE available FALSE occupied
     registry: Arc<[AtomicBool; BLOCKS]>,
-    waiters: Arc<crossbeam_queue::SegQueue<Waker>>,
+    waiters: Arc<crossbeam_queue::SegQueue<InnerWaker>>,
 }
 
 impl<Inner, const BLOCKS: usize, const SIZE: usize> Clone for Buffer<Inner, BLOCKS, SIZE> {
@@ -51,12 +57,19 @@ impl<Inner, const BLOCKS: usize, const SIZE: usize> Buffer<Inner, BLOCKS, SIZE> 
         let idx = guard.idx;
         self.registry[idx].store(true, Ordering::SeqCst);
         if let Some(waker) = self.waiters.pop() {
-            waker.wake();
+            match waker {
+                InnerWaker::Waker(waker) => waker.wake(),
+                InnerWaker::Thread(thread) => thread.unpark(),
+            }
         }
     }
 
     fn push_waker(&self, waker: Waker) {
-        self.waiters.push(waker);
+        self.waiters.push(InnerWaker::Waker(waker));
+    }
+
+    fn push_thread(&self, thread: Thread) {
+        self.waiters.push(InnerWaker::Thread(thread));
     }
 }
 
@@ -71,6 +84,24 @@ where
             block
         } else {
             BufGuardFuture::new(self).await
+        }
+    }
+
+    pub fn blocking_acquire_block(&self) -> BufGuard<Inner, BLOCKS, SIZE> {
+        let block = self.try_acquire_block();
+
+        if let Some(block) = block {
+            block
+        } else {
+            loop {
+                let current = std::thread::current();
+                self.waiters.push(InnerWaker::Thread(current.clone()));
+
+                std::thread::park();
+                if let Some(block) = self.try_acquire_block() {
+                    return block;
+                }
+            }
         }
     }
 
@@ -149,17 +180,17 @@ pub struct BufGuard<Inner, const BLOCKS: usize, const SIZE: usize> {
 impl<Inner, const BLOCKS: usize, const SIZE: usize> Deref for BufGuard<Inner, BLOCKS, SIZE> {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
-        &self.block
+        self.block
     }
 }
 
-impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> DerefMut for BufGuard<Inner, BLOCKS, SIZE> {
+impl<Inner, const BLOCKS: usize, const SIZE: usize> DerefMut for BufGuard<Inner, BLOCKS, SIZE> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.block
+        self.block
     }
 }
 
-impl<'a, Inner, const BLOCKS: usize, const SIZE: usize> Drop for BufGuard<Inner, BLOCKS, SIZE> {
+impl<Inner, const BLOCKS: usize, const SIZE: usize> Drop for BufGuard<Inner, BLOCKS, SIZE> {
     fn drop(&mut self) {
         self.fill(0);
         let buffer = self.buffer.clone();

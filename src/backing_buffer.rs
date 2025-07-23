@@ -24,10 +24,10 @@ impl<Inner, const BLOCKS: usize, const SIZE: usize> BackingBuffer<Inner, BLOCKS,
 impl<const BLOCKS: usize, const SIZE: usize> BackingBuffer<Box<[u8]>, BLOCKS, SIZE> {
     pub fn new_vec() -> Self {
         let mut v = Vec::with_capacity(BLOCKS * SIZE);
+        v.fill(0);
         unsafe {
             v.set_len(BLOCKS * SIZE);
         }
-        v.fill(0);
 
         Self(UnsafeCell::new(v.into_boxed_slice()))
     }
@@ -41,6 +41,7 @@ impl<const BLOCKS: usize, const SIZE: usize> BackingBuffer<memmap2::MmapMut, BLO
         let mut backing_file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
+            .truncate(true)
             .write(true)
             .open(file)
             .unwrap();
